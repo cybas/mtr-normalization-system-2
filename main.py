@@ -18,6 +18,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from src.processors.mtr_processor import AsyncMTRProcessor
 from src.utils.excel_parser import ExcelParser
+from src.utils.embeddings import ProductEmbeddingGenerator
+from src.utils.vector_store import ProductEmbeddingManager
 from config.config import get_config
 
 # Load environment variables
@@ -343,6 +345,48 @@ def info():
     console.print("\n[bold]Supported Categories:[/bold]")
     for category, info in config["categories"].items():
         console.print(f"  • {category}: {', '.join(info['keywords'][:3])}...")
+
+
+@cli.command()
+@click.argument('input_dir', type=click.Path(exists=True))
+@click.option('--pattern', '-p', default='*.xlsx', help='File pattern to match')
+def index(input_dir, pattern):
+    """Index products from Excel files into the vector database"""
+    console.print(f"\n[bold green]Indexing files in {input_dir}[/bold green]")
+
+    asyncio.run(_index_files(input_dir, pattern))
+
+
+async def _index_files(input_dir: str, pattern: str):
+    """Asynchronously index products from Excel files"""
+    parser = ExcelParser()
+    embedder = ProductEmbeddingGenerator()
+    manager = ProductEmbeddingManager()
+
+    files = list(Path(input_dir).glob(pattern))
+    if not files:
+        console.print(f"[yellow]No files found matching pattern: {pattern}[/yellow]")
+        return
+
+    for file in files:
+        console.print(f"\n[cyan]Processing {file.name}[/cyan]")
+        products = parser.parse_file(str(file))
+
+        for product in products:
+            embedding = await embedder.generate_product_embedding(
+                product.original_name,
+                product.specifications,
+                product.category.value,
+            )
+
+            await manager.store_product(
+                product_id=f"{file.stem}_{product.excel_row or products.index(product)}",
+                product_name=product.original_name,
+                embedding=embedding,
+                metadata=product.to_dict(),
+            )
+
+    console.print("\n[bold green]✓ Indexing complete[/bold green]")
 
 
 if __name__ == "__main__":
